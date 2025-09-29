@@ -1,0 +1,27 @@
+﻿<Window x:Class="RakutenDrive.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:resources="clr-namespace:RakutenDrive.Resources"
+        Title="About" Height="270" Width="300" ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        Icon="/Assets/Images/Icons/Logo_light.ico"
+        >
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- App Logo -->
+        <Image Source="pack://application:,,,/Assets/Images/Icons/About_logo.png" Height="90" HorizontalAlignment="Center" Margin="0,10,0,10" />
+
+        <!-- App Information -->
+        <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <TextBlock Text="{x:Static resources:Strings.rakuten_drive}" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" />
+            <TextBlock Text="{x:Static resources:Localization.VersionString}" FontSize="14" HorizontalAlignment="Center" Margin="0,5,0,0" />
+            <TextBlock Text="{x:Static resources:Strings.about_window_copyright}" FontSize="12" HorizontalAlignment="Center" Margin="0,5,0,0" />
+        </StackPanel>
+
+        <!-- Close Button -->
+    </Grid>
+</Window>

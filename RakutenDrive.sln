@@ -1,0 +1,36 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34728.123
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RakutenDrive", "RakutenDrive\RakutenDrive.csproj", "{CBC1DC36-2E3B-47A7-91BB-447033B950CF}"
+EndProject
+Project("{54435603-DBB4-11D2-8724-00A0C9A8B90C}") = "RakutenDriveSetup", "RakutenDriveSetup\RakutenDriveSetup.vdproj", "{0307F463-61D8-F246-F364-186930F5E23F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Debug|x64.Build.0 = Debug|Any CPU
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Release|x64.ActiveCfg = Release|Any CPU
+		{CBC1DC36-2E3B-47A7-91BB-447033B950CF}.Release|x64.Build.0 = Release|Any CPU
+		{0307F463-61D8-F246-F364-186930F5E23F}.Debug|Any CPU.ActiveCfg = Debug
+		{0307F463-61D8-F246-F364-186930F5E23F}.Debug|x64.ActiveCfg = Debug
+		{0307F463-61D8-F246-F364-186930F5E23F}.Release|Any CPU.ActiveCfg = Release
+		{0307F463-61D8-F246-F364-186930F5E23F}.Release|x64.ActiveCfg = Release
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {16942A81-84C6-4D9B-9501-5A360C67A272}
+	EndGlobalSection
+EndGlobal

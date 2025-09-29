@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "RakutenDrive": {
+      "commandName": "Project",
+      "nativeDebugging": true
+    }
+  }
+}
