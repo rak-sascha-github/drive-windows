@@ -58,6 +58,12 @@ public partial class App
 
 	private const int balloonTipTimeout = 1500; // 1.5 seconds
 
+	/// <summary>
+	/// Provides access to the SyncProvider instance.  Consumers should check SyncProvider.IsFullyInitialised
+	/// before performing operations that depend on the provider being ready.
+	/// </summary>
+	public SyncProvider SyncProvider => _syncProvider;	
+
 	#endregion
 
 	// ----------------------------------------------------------------------------------------
@@ -157,7 +163,7 @@ public partial class App
 				var payload = new { refresh_token = refreshToken };
 				var refreshResponse = await accountService.GetRefreshToken(payload);
 
-				if (refreshResponse != null)
+				if (refreshResponse is { IDToken: not null, RefreshToken: not null })
 				{
 					TokenStorage.SetAccessToken(refreshResponse.IDToken);
 					TokenStorage.SetRefreshToken(refreshResponse.RefreshToken);
@@ -296,6 +302,9 @@ public partial class App
 			Strings.Culture = defaultCulture;
 
 			Log.Info("Application is starting...");
+
+			var name = Assembly.GetExecutingAssembly().GetName();
+			Log.Info($"{name.FullName} v{name.Version} ({name.Version?.Build})");
 
 			/* Single instance */
 			bool createdNew;

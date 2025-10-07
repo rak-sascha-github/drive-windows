@@ -32,7 +32,7 @@ public class OpenAsyncParams
 /// </summary>
 public class ReadFileOpenResult : GenericResult
 {
-	public Placeholder Placeholder;
+	public Placeholder? Placeholder;
 
 
 	public ReadFileOpenResult()
@@ -96,7 +96,7 @@ public class ReadFileCloseResult : GenericResult
 /// </summary>
 public class WriteFileOpenResult : GenericResult
 {
-	public Placeholder Placeholder;
+	public Placeholder? Placeholder;
 
 
 	public WriteFileOpenResult()
@@ -133,7 +133,7 @@ public class WriteFileWriteResult : GenericResult
 /// </summary>
 public class WriteFileCloseResult : GenericResult
 {
-	public Placeholder Placeholder;
+	public Placeholder? Placeholder;
 }
 
 
@@ -144,7 +144,7 @@ public class WriteFileCloseResult : GenericResult
 /// </summary>
 public class GetFileInfoResult : GenericResult
 {
-	public Placeholder Placeholder;
+	public Placeholder? Placeholder;
 
 
 	public GetFileInfoResult()
@@ -398,9 +398,9 @@ public enum SyncMode
 public class DynamicServerPlaceholder
 {
 	private readonly bool _isDirectory;
-	private readonly string _relativePath;
-	private readonly SyncContext _syncContext;
-	private Placeholder _placeholder;
+	private readonly string? _relativePath;
+	private readonly SyncContext? _syncContext;
+	private Placeholder? _placeholder;
 
 
 	public DynamicServerPlaceholder(string relativePath, bool isDirectory, SyncContext syncContext)

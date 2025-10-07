@@ -2,6 +2,7 @@
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using log4net;
 using log4net.Appender;
 using log4net.Config;
@@ -30,7 +31,14 @@ public static class Log
 	// CONSTRUCTOR
 	// --------------------------------------------------------------------------------------------
 
-
+	/// <summary>
+	///     Provides static utility methods for handling application logging at various severity levels.
+	/// </summary>
+	/// <remarks>
+	///     Leverages the log4net framework to support detailed logging, capable of capturing
+	///     debugging information, warnings, errors, and application events. Includes functionality
+	///     to configure a rolling file-based logging system.
+	/// </remarks>
 	static Log()
 	{
 		var logFilePath = SetupLogging();
@@ -41,55 +49,130 @@ public static class Log
 
 	// --------------------------------------------------------------------------------------------
 	// STATIC API
-	// --------------------------------------------------------------------------------------------
-
-
-	public static void Debug(string message)
+	// -------------------------------------------------------------------------------------------
+	
+	/// <summary>
+	///     Logs debug-level messages, including the source file name, line number, and calling member name.
+	///     This method is useful for tracing and diagnostics during development.
+	/// </summary>
+	/// <param name="message">The debug message to log.</param>
+	/// <param name="memberName">
+	///     The name of the calling method or property. This value is automatically populated
+	///     when called and typically corresponds to the member initiating the log request.
+	/// </param>
+	/// <param name="sourceFilePath">
+	///     The file path of the source code file that contains the caller. This value is automatically populated
+	///     by the compiler at runtime.
+	/// </param>
+	/// <param name="sourceLineNumber">
+	///     The line number in the source code file where the log request originates. This value is automatically populated
+	///     by the compiler at runtime.
+	/// </param>
+	public static void Debug(string message, [CallerMemberName] string memberName = "", [CallerFilePath] string sourceFilePath = "", [CallerLineNumber] int sourceLineNumber = 0)
 	{
-		_logger.Debug(message);
+		var prefix = $"{Path.GetFileName(sourceFilePath)}:{sourceLineNumber} ";
+		_logger.Debug(prefix + message);
 	}
 
 
-	public static void Info(string message)
+	/// <summary>
+	///     Logs informational messages, typically used to provide general runtime details about program execution.
+	/// </summary>
+	/// <param name="message">
+	///     The informational message to log. This message includes contextual information about the operation being performed.
+	/// </param>
+	/// <param name="memberName">
+	///     The name of the calling method. Automatically populated by the runtime unless explicitly provided.
+	/// </param>
+	/// <param name="sourceFilePath">
+	///     The file path of the source code that contains the call to this method. Automatically populated by the runtime unless explicitly provided.
+	/// </param>
+	/// <param name="sourceLineNumber">
+	///     The line number in the source file where the method was called. Automatically populated by the runtime unless explicitly provided.
+	/// </param>
+	public static void Info(string message, [CallerMemberName] string memberName = "", [CallerFilePath] string sourceFilePath = "", [CallerLineNumber] int sourceLineNumber = 0)
 	{
-		_logger.Info(message);
+		var prefix = $"{Path.GetFileName(sourceFilePath)}:{sourceLineNumber} ";
+		_logger.Info(prefix + message);
 	}
 
 
-	public static void Warn(string message)
+	/// <summary>
+	///     Logs a message with a warning severity level, including the source file name,
+	///     line number, and member name where the method was called.
+	/// </summary>
+	/// <param name="message">The warning message to be logged.</param>
+	/// <param name="memberName">The name of the calling member. Automatically set by the compiler.</param>
+	/// <param name="sourceFilePath">The full file path of the source code file where the method was called. Automatically set by the compiler.</param>
+	/// <param name="sourceLineNumber">The line number in the source code file where the method was called. Automatically set by the compiler.</param>
+	public static void Warn(string message, [CallerMemberName] string memberName = "", [CallerFilePath] string sourceFilePath = "", [CallerLineNumber] int sourceLineNumber = 0)
 	{
-		_logger.Warn(message);
+		var prefix = $"{Path.GetFileName(sourceFilePath)}:{sourceLineNumber} ";
+		_logger.Warn(prefix + message);
 	}
 
 
-	public static void Error(string message)
+	/// <summary>
+	///     Logs an error message with information about the source of the call, including file name and line number.
+	/// </summary>
+	/// <param name="message">The error message to be logged.</param>
+	/// <param name="memberName">The name of the member invoking the method. This parameter is automatically populated by the compiler.</param>
+	/// <param name="sourceFilePath">The file path of the source code invoking the method. This parameter is automatically populated by the compiler.</param>
+	/// <param name="sourceLineNumber">The line number in the source code where the method was invoked. This parameter is automatically populated by the compiler.</param>
+	public static void Error(string message, [CallerMemberName] string memberName = "", [CallerFilePath] string sourceFilePath = "", [CallerLineNumber] int sourceLineNumber = 0)
 	{
-		_logger.Error(message);
+		var prefix = $"{Path.GetFileName(sourceFilePath)}:{sourceLineNumber} ";
+		_logger.Error(prefix + message);
 	}
 
 
-	public static void Error(string message, Exception ex)
+	/// <summary>
+	///     Logs an error message along with detailed contextual information including the calling member name, file path, and line number.
+	/// </summary>
+	/// <param name="message">The error message to log.</param>
+	/// <param name="ex">The exception associated with the error being logged.</param>
+	/// <param name="memberName">The name of the member from where the method is called. This value is automatically populated by the compiler.</param>
+	/// <param name="sourceFilePath">The full file path from which the method is called. This value is automatically populated by the compiler.</param>
+	/// <param name="sourceLineNumber">The line number in the source file from which the method is called. This value is automatically populated by the compiler.</param>
+	public static void Error(string message, Exception ex, [CallerMemberName] string memberName = "", [CallerFilePath] string sourceFilePath = "", [CallerLineNumber] int sourceLineNumber = 0)
 	{
-		_logger.Error(message, ex);
+		var prefix = $"{Path.GetFileName(sourceFilePath)}:{sourceLineNumber} ";
+		_logger.Error(prefix + message, ex);
 	}
 
 
-	public static void Fatal(string message)
+	/// <summary>
+	///     Logs a critical message indicating a fatal event that will likely lead to application termination.
+	/// </summary>
+	/// <param name="message">The fatal error message to log.</param>
+	/// <param name="memberName">The name of the caller member. This parameter is automatically populated using CallerMemberName.</param>
+	/// <param name="sourceFilePath">The file path of the source code. This parameter is automatically populated using CallerFilePath.</param>
+	/// <param name="sourceLineNumber">The line number in the source file. This parameter is automatically populated using CallerLineNumber.</param>
+	public static void Fatal(string message, [CallerMemberName] string memberName = "", [CallerFilePath] string sourceFilePath = "", [CallerLineNumber] int sourceLineNumber = 0)
 	{
-		_logger.Fatal(message);
+		var prefix = $"{Path.GetFileName(sourceFilePath)}:{sourceLineNumber} ";
+		_logger.Fatal(prefix + message);
 	}
 
 
-	public static void Fatal(string message, Exception ex)
+	/// <summary>
+	///     Logs a fatal error message, optionally including an associated exception, along with caller information for precise traceability.
+	/// </summary>
+	/// <param name="message">The error message to be logged.</param>
+	/// <param name="ex">The exception to be logged alongside the message, providing additional context. This parameter is optional and can be null.</param>
+	/// <param name="memberName">The name of the method or property that invoked the logging operation. This is automatically populated by the runtime.</param>
+	/// <param name="sourceFilePath">The file path of the source code where the logging call resides. This is automatically populated by the runtime.</param>
+	/// <param name="sourceLineNumber">The line number in the source file where the logging call resides. This is automatically populated by the runtime.</param>
+	public static void Fatal(string message, Exception ex, [CallerMemberName] string memberName = "", [CallerFilePath] string sourceFilePath = "", [CallerLineNumber] int sourceLineNumber = 0)
 	{
-		_logger.Fatal(message, ex);
+		var prefix = $"{Path.GetFileName(sourceFilePath)}:{sourceLineNumber} ";
+		_logger.Fatal(prefix + message, ex);
 	}
 
 
 	// --------------------------------------------------------------------------------------------
 	// PRIVATE METHODS
 	// --------------------------------------------------------------------------------------------
-
 
 	/// <summary>
 	///     Configures the logging system for the application by setting up the log file directory
