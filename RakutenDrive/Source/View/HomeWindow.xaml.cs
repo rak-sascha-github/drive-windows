@@ -108,7 +108,7 @@ public partial class HomeWindow
 	/// </summary>
 	/// <param name="sender">The source of the event, typically a UI element like the folder icon.</param>
 	/// <param name="e">The event data containing information about the mouse button action.</param>
-	private void OnOpenFolderMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+	private void OnOpenFolderMouseLeftButtonUp2(object sender, MouseButtonEventArgs e)
 	{
 		Task.Run(() =>
 		{
@@ -122,6 +122,37 @@ public partial class HomeWindow
 				Application.Current.Dispatcher.BeginInvoke(new Action(() => MessageBox.Show($"Failed to open folder:\n{ex.Message}", "Rakuten Drive", MessageBoxButton.OK, MessageBoxImage.Error)));
 			}
 		}).FireAndForget("Home_OpenFolder");
+	}
+
+
+	/// <summary>
+	/// Handles the event triggered when the left mouse button is released after clicking on the folder icon in the UI.
+	/// Waits for the sync provider to finish initialising before opening the folder in Explorer.
+	/// </summary>
+	private async void OnOpenFolderMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+	{
+		try
+		{
+			// obtain the provider from the App singleton
+			var provider = App.Instance?.SyncProvider;
+
+			// if the provider exists, wait until it is fully initialised
+			if (provider != null)
+			{
+				while (!provider.IsFullyInitialized)
+				{
+					await Task.Delay(200);
+				}
+			}
+
+			// open the folder off the UI thread
+			await Task.Run(() => { Process.Start(new ProcessStartInfo { FileName = _syncRootPath, UseShellExecute = true, Verb = "open" }); });
+		}
+		catch (Exception ex)
+		{
+			// marshal UI feedback back to the dispatcher
+			Application.Current.Dispatcher.BeginInvoke(new Action(() => MessageBox.Show($"Failed to open folder:\n{ex.Message}", "Rakuten Drive", MessageBoxButton.OK, MessageBoxImage.Error)));
+		}
 	}
 
 

@@ -42,46 +42,44 @@ namespace RakutenDrive.Controllers.Providers.SyncProvider;
 public sealed partial class SyncProvider
 {
 	// ----------------------------------------------------------------------------------------
-	// INIT
+	// TYPES
 	// ----------------------------------------------------------------------------------------
-	#region INIT
+	#region TYPES
 
 	/// <summary>
-	///     Represents a provider for synchronizing data between a local machine and a remote server.
+	///     Represents the parameters required for a data synchronization operation in the <see cref="SyncProvider" /> class.
 	/// </summary>
-	/// <remarks>
-	///     This class initializes and manages the synchronization context, settings, and operations required
-	///     to keep local and remote data in sync. It handles event subscriptions, processing workflows,
-	///     and timers that monitor both local and remote changes.
-	///     The <see cref="SyncProvider" /> class is intended to simplify data synchronization tasks
-	///     by abstracting the underlying operations such as file change detection, data fetching,
-	///     and failure handling in a structured manner.
-	/// </remarks>
-	public SyncProvider(SyncProviderParameters parameter)
+	public class SyncDataParam
 	{
-		_syncContext = new SyncContext
-		{
-			LocalRootFolder = parameter.LocalDataPath,
-			LocalRootFolderNormalized = parameter.LocalDataPath.Remove(0, 2),
-			ServerProvider = parameter.ServerProvider,
-			SyncProviderParameter = parameter,
-			SyncProvider = this
-		};
+		public CancellationToken Ctx;
+		public required string Folder;
+		public SyncMode SyncMode;
+	}
 
-		_syncContext.ServerProvider.SyncContext = _syncContext;
-		_optionalChunkSize = _optionalChunkSizeFaktor * _chunkSize;
-		_fetchDataRunningQueue = new ConcurrentDictionary<Guid, DataActions>();
 
-		_syncContext.ServerProvider.ServerProviderStateChanged += OnServerProviderStateChanged;
-		_syncContext.ServerProvider.FileChanged += OnServerProviderFileChanged;
+	/// <summary>
+	///     Represents the details of a file or directory change detected locally within the <see cref="SyncProvider" /> class.
+	/// </summary>
+	public class LocalChangedData
+	{
+		public ExtendedWatcherChangeTypes ChangeType { get; set; }
+		public required string FullPath { get; set; }
+		public string? OldFullPath { get; set; }
+	}
 
-		_syncActionBlock = new ActionBlock<SyncDataParam>(SyncAction, new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 8, CancellationToken = _globalShutDownToken });
 
-		_changedLocalDataQueue = new ActionBlock<ProcessChangedDataArgs>(ChangedLocalDataAction, new ExecutionDataflowBlockOptions
-		{
-			/* Ensure sequential processing */
-			MaxDegreeOfParallelism = 1, CancellationToken = _globalShutDownToken
-		});
+	/// <summary>
+	///     Represents the arguments required to process changes in local data during sync operations in the <see cref="SyncProvider" />
+	///     class.
+	/// </summary>
+	public class ProcessChangedDataArgs
+	{
+		public ExtendedWatcherChangeTypes ChangeType;
+		public required string FullPath;
+		public CloudFilterAPI.ExtendedPlaceholderState? LocalPlaceHolder;
+		public required string? OldFullPath;
+		public DynamicServerPlaceholder? RemotePlaceholder;
+		public SyncMode SyncMode;
 	}
 
 	#endregion
@@ -93,6 +91,17 @@ public sealed partial class SyncProvider
 
 	public delegate void ShowNotification(string title, string message);
 
+
+	/// <summary>
+	///     Indicates whether the provider has completed all startup tasks (callbacks registered, watcher initialised,
+	///     server connected). UI code can wait on this flag before performing operations that trigger CFAPI callbacks.
+	/// </summary>
+	public bool IsFullyInitialized { get; private set; }
+
+	/// <summary>
+	///     Exposes the current status of the server provider (Disconnected, Connecting, Connected, etc.).
+	/// </summary>
+	public ServerProviderStatus ServerStatus => _syncContext.ServerProvider.Status;
 
 	//public event EventHandler<int>? QueuedItemsCountChanged;
 	//public event EventHandler<int> FailedDataQueueChanged;
@@ -153,6 +162,51 @@ public sealed partial class SyncProvider
 	private int _inflightCallbackCount;
 
 	#endregion
+	
+	// ----------------------------------------------------------------------------------------
+	// INIT
+	// ----------------------------------------------------------------------------------------
+	#region INIT
+
+	/// <summary>
+	///     Represents a provider for synchronizing data between a local machine and a remote server.
+	/// </summary>
+	/// <remarks>
+	///     This class initializes and manages the synchronization context, settings, and operations required
+	///     to keep local and remote data in sync. It handles event subscriptions, processing workflows,
+	///     and timers that monitor both local and remote changes.
+	///     The <see cref="SyncProvider" /> class is intended to simplify data synchronization tasks
+	///     by abstracting the underlying operations such as file change detection, data fetching,
+	///     and failure handling in a structured manner.
+	/// </remarks>
+	public SyncProvider(SyncProviderParameters parameter)
+	{
+		_syncContext = new SyncContext
+		{
+			LocalRootFolder = parameter.LocalDataPath,
+			LocalRootFolderNormalized = parameter.LocalDataPath.Remove(0, 2),
+			ServerProvider = parameter.ServerProvider,
+			SyncProviderParameter = parameter,
+			SyncProvider = this
+		};
+
+		_syncContext.ServerProvider.SyncContext = _syncContext;
+		_optionalChunkSize = _optionalChunkSizeFaktor * _chunkSize;
+		//_fetchDataRunningQueue = new ConcurrentDictionary<Guid, DataActions>();
+
+		_syncContext.ServerProvider.ServerProviderStateChanged += OnServerProviderStateChanged;
+		_syncContext.ServerProvider.FileChanged += OnServerProviderFileChanged;
+
+		_syncActionBlock = new ActionBlock<SyncDataParam>(SyncAction, new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = 8, CancellationToken = _globalShutDownToken });
+
+		_changedLocalDataQueue = new ActionBlock<ProcessChangedDataArgs>(ChangedLocalDataAction, new ExecutionDataflowBlockOptions
+		{
+			/* Ensure sequential processing */
+			MaxDegreeOfParallelism = 1, CancellationToken = _globalShutDownToken
+		});
+	}
+
+	#endregion
 
 	// --------------------------------------------------------------------------------------------
 	// ACTIONS
@@ -207,6 +261,7 @@ public sealed partial class SyncProvider
 	{
 		/* Ändern Sie diesen Code nicht. Fügen Sie Bereinigungscode in der Methode "Dispose(bool disposing)" ein. */
 		Dispose(true);
+		
 		// ReSharper disable once GCSuppressFinalizeForTypeWithoutDestructor
 		GC.SuppressFinalize(this);
 	}
@@ -231,7 +286,7 @@ public sealed partial class SyncProvider
 		syncRootID += WindowsIdentity.GetCurrent().User?.Value;
 		syncRootID += @"!";
 
-		// Provider Account -> Used Hash of LocalPath asuming that no Account would be synchronized to the same Folder.
+		/* Provider Account -> Used Hash of LocalPath asuming that no Account would be synchronized to the same Folder. */
 		syncRootID += _syncContext.LocalRootFolder.GetHashCode();
 		return syncRootID;
 	}
@@ -307,8 +362,9 @@ public sealed partial class SyncProvider
 				return true;
 			}
 
-			var path = await StorageFolder.GetFolderFromPathAsync(_syncContext.LocalRootFolder);
+			var path         = await StorageFolder.GetFolderFromPathAsync(_syncContext.LocalRootFolder);
 			var syncRootInfo = StorageProviderSyncRootManager.GetSyncRootInformationForFolder(path);
+			
 			if (syncRootInfo != null)
 			{
 				return Unregister(syncRootInfo.Id, deleteRootDir);
@@ -457,7 +513,8 @@ public sealed partial class SyncProvider
 				var rel = relativePath;
 				if (!string.IsNullOrEmpty(rel))
 				{
-					rel = "\\" + rel; // preserve your original leading backslash behavior
+					/* Preserve your original leading backslash behavior. */
+					rel = "\\" + rel;
 				}
 
 				await SyncDataAsyncRecursive(_syncContext.LocalRootFolder + rel, ctx, syncMode).ConfigureAwait(false);
@@ -548,16 +605,19 @@ public sealed partial class SyncProvider
 		InitWatcher();
 		_fileOperations = new FileOperations(_syncContext.LocalRootFolder, ShowMessage);
 
-		Log.Debug("Connecting to server...");
+		/* Connect to server provider. */
+		Log.Debug("Connecting to server ...");
 		var connectResult = _syncContext.ServerProvider.Connect();
 		Log.Debug("Connection result: " + connectResult.Status);
 
+		/* Set initial provider status to idle. */
 		ret = CldApi.CfUpdateSyncProviderStatus(_syncContext.ConnectionKey, CldApi.CF_SYNC_PROVIDER_STATUS.CF_PROVIDER_STATUS_IDLE);
 		if (ret.Succeeded == false)
 		{
 			Log.Warn("Error with CfUpdateSyncProviderStatus: " + ret);
 		}
 
+		/* Start the API log loop if needed. */
 		if (_apiLogLoopTask == null || _apiLogLoopTask.IsCompleted)
 		{
 			_apiLogLoopTask = StartApiFileLogLoop(_globalShutDownToken);
@@ -568,6 +628,10 @@ public sealed partial class SyncProvider
 		}
 
 		_isConnected = true;
+		
+		/* Mark the provider as fully initialised. */
+		IsFullyInitialized = true;
+		
 		Log.Debug("Ready.");
 	}
 
@@ -986,22 +1050,22 @@ public sealed partial class SyncProvider
 			Log.Info($"Registering SyncRoot: {path}");
 			StorageProviderSyncRootInfo SyncRootInfo = new()
 			{
-				Id = rootID,
-				AllowPinning = true,
-				DisplayNameResource = _syncContext.SyncProviderParameter.ProviderInfo.ProviderName,
-				HardlinkPolicy = StorageProviderHardlinkPolicy.None,
-				HydrationPolicy = StorageProviderHydrationPolicy.Partial,
+				Id                      = rootID,
+				AllowPinning            = true,
+				DisplayNameResource     = _syncContext.SyncProviderParameter.ProviderInfo.ProviderName,
+				HardlinkPolicy          = StorageProviderHardlinkPolicy.None,
+				HydrationPolicy         = StorageProviderHydrationPolicy.Partial,
 				HydrationPolicyModifier = StorageProviderHydrationPolicyModifier.AutoDehydrationAllowed | StorageProviderHydrationPolicyModifier.StreamingAllowed,
-				InSyncPolicy = StorageProviderInSyncPolicy.FileLastWriteTime,
-				Path = path,
-				PopulationPolicy = StorageProviderPopulationPolicy.Full,
-				ProtectionMode = StorageProviderProtectionMode.Unknown,
-				ProviderId = _syncContext.SyncProviderParameter.ProviderInfo.ProviderId,
-				Version = _syncContext.SyncProviderParameter.ProviderInfo.ProviderVersion,
-				IconResource = shortcutIcon,
-				ShowSiblingsAsGroup = false,
-				RecycleBinUri = null,
-				Context = CryptographicBuffer.ConvertStringToBinary(GetSyncRootID(), BinaryStringEncoding.Utf8)
+				InSyncPolicy            = StorageProviderInSyncPolicy.FileLastWriteTime,
+				Path                    = path,
+				PopulationPolicy        = StorageProviderPopulationPolicy.Full,
+				ProtectionMode          = StorageProviderProtectionMode.Unknown,
+				ProviderId              = _syncContext.SyncProviderParameter.ProviderInfo.ProviderId,
+				Version                 = _syncContext.SyncProviderParameter.ProviderInfo.ProviderVersion,
+				IconResource            = shortcutIcon,
+				ShowSiblingsAsGroup     = false,
+				RecycleBinUri           = null,
+				Context                 = CryptographicBuffer.ConvertStringToBinary(GetSyncRootID(), BinaryStringEncoding.Utf8)
 			};
 
 			SyncRootInfo.StorageProviderItemPropertyDefinitions.Add(new StorageProviderItemPropertyDefinition { DisplayNameResource = "Description", Id = 0 });
@@ -1036,15 +1100,15 @@ public sealed partial class SyncProvider
 			if (deleteRootDir)
 			{
 				/* delete root folder */
-				var syncRootPath2 = StringHelper.GetFullPathRootFolder();
+				var syncRootPath = StringHelper.GetFullPathRootFolder();
 
 				/* Delete the folder */
-				if (Directory.Exists(syncRootPath2))
+				if (Directory.Exists(syncRootPath))
 				{
 					/* true to delete all subdirectories and files\ */
-					if (!TryDeleteDirectoryWithBackoff(syncRootPath2, rootId))
+					if (!TryDeleteDirectoryWithBackoff(syncRootPath, rootId))
 					{
-						Log.Error("[Unregister] Failed to clean up sync-root folder '{syncRootPath2}'. It may be in use by Explorer or a shell extension.");
+						Log.Error($"[Unregister] Failed to clean up sync-root folder '{syncRootPath}'. It may be in use by Explorer or a shell extension.");
 						ShowMessage("Sync cleanup warning", "The sync folder couldn't be removed because it was in use. We'll retry later or remove it on reboot.");
 					}
 				}
@@ -1115,7 +1179,7 @@ public sealed partial class SyncProvider
 	/// </remarks>
 	internal async Task<GenericResult<List<Placeholder>>> GetServerFileListAsync(string relativePath, CancellationToken cancellationToken)
 	{
-		Log.Debug("GetServerFileListAsync: " + relativePath);
+		Log.Debug($"Getting server file list async for path \"{relativePath}\" ...");
 
 		GenericResult<List<Placeholder>> completionStatus = new();
 		completionStatus.Data = new List<Placeholder>();
@@ -1123,8 +1187,7 @@ public sealed partial class SyncProvider
 		using (var fileList = _syncContext.ServerProvider.GetNewFileList())
 		{
 			var result = await fileList.OpenAsync(relativePath, cancellationToken);
-			Log.Debug(result.Succeeded.ToString());
-			Log.Debug(result.Message);
+			Log.Debug($"Status: {result.Message}");
 
 			if (!result.Succeeded)
 			{
@@ -2154,19 +2217,17 @@ public sealed partial class SyncProvider
 	/// <exception cref="OperationCanceledException">Thrown if the operation is canceled via the provided cancellation token.</exception>
 	private async Task<bool> DownloadPartialData(CldApi.CF_CONNECTION_KEY connectionKey, CldApi.CF_TRANSFER_KEY transferKey, string url, long fileSize, long offset, long length, CancellationToken cancellationToken)
 	{
-		bool isSucessful;
+		bool success;
+		
 		using (var client = new HttpClient())
 		{
-			var isPartialContent = false;
-			if (offset > 0 || length < fileSize)
+			var isPartialContent = offset > 0 || length < fileSize;
+			if (isPartialContent)
 			{
-				isPartialContent = true;
 				client.DefaultRequestHeaders.Range = new RangeHeaderValue(offset, offset + length - 1);
 			}
 
 			var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-
-			/* Ensure the response is successful and supports partial content */
 			if (isPartialContent && response.StatusCode != HttpStatusCode.PartialContent)
 			{
 				throw new InvalidOperationException("The server does not support partial content or the range is invalid.");
@@ -2194,12 +2255,19 @@ public sealed partial class SyncProvider
 						}
 						catch (Exception e)
 						{
+							/* Report failure (no buffer pointer) and break. */
 							NTStatus status = e is OperationCanceledException ? NTStatus.STATUS_CANCELLED : NTStatus.STATUS_UNSUCCESSFUL;
 							TransferData(connectionKey, transferKey, IntPtr.Zero, offset + totalRead, count, status);
 							break;
 						}
 
-						if (TransferData(connectionKey, transferKey, buffer, offset + totalRead, count, NTStatus.STATUS_SUCCESS).Failed)
+						/* Transfer the current chunk.  This calls CfExecute via TransferData. */
+						var hr = TransferData(connectionKey, transferKey, buffer, offset + totalRead, count, NTStatus.STATUS_SUCCESS);
+
+						/* Keep the pinned byte array alive until CfExecute has returned. */
+						GC.KeepAlive(bytes);
+
+						if (hr.Failed)
 						{
 							break;
 						}
@@ -2211,16 +2279,26 @@ public sealed partial class SyncProvider
 						}
 					}
 
-					isSucessful = totalRead == length;
+					success = totalRead == length;
 				}
 				finally
 				{
-					handle.Free();
+					/* Delay freeing the pinned handle to ensure the Cloud‑Files driver has finished with the buffer. */
+					var capturedHandle = handle;
+					_ = Task.Run(async () =>
+					{
+						/* Adjust timeout as appropriate. */
+						await Task.Delay(TimeSpan.FromSeconds(1));
+						if (capturedHandle.IsAllocated)
+						{
+							capturedHandle.Free();
+						}
+					});
 				}
 			}
 		}
 
-		return isSucessful;
+		return success;
 	}
 
 
@@ -2499,50 +2577,6 @@ public sealed partial class SyncProvider
 		{
 			_disposedValue = true;
 		}
-	}
-
-	#endregion
-
-
-	// ----------------------------------------------------------------------------------------
-	// TYPES
-	// ----------------------------------------------------------------------------------------
-	#region TYPES
-
-	/// <summary>
-	///     Represents the parameters required for a data synchronization operation in the <see cref="SyncProvider" /> class.
-	/// </summary>
-	public class SyncDataParam
-	{
-		public CancellationToken Ctx;
-		public required string Folder;
-		public SyncMode SyncMode;
-	}
-
-
-	/// <summary>
-	///     Represents the details of a file or directory change detected locally within the <see cref="SyncProvider" /> class.
-	/// </summary>
-	public class LocalChangedData
-	{
-		public ExtendedWatcherChangeTypes ChangeType { get; set; }
-		public required string FullPath { get; set; }
-		public string? OldFullPath { get; set; }
-	}
-
-
-	/// <summary>
-	///     Represents the arguments required to process changes in local data during sync operations in the <see cref="SyncProvider" />
-	///     class.
-	/// </summary>
-	public class ProcessChangedDataArgs
-	{
-		public ExtendedWatcherChangeTypes ChangeType;
-		public required string FullPath;
-		public CloudFilterAPI.ExtendedPlaceholderState? LocalPlaceHolder;
-		public required string? OldFullPath;
-		public DynamicServerPlaceholder? RemotePlaceholder;
-		public SyncMode SyncMode;
 	}
 
 	#endregion

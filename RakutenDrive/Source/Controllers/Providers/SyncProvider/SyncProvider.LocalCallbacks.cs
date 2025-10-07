@@ -48,7 +48,6 @@ public sealed partial class SyncProvider
 		private readonly T value;
 		private bool disposedValue;
 
-
 		/// <summary>
 		///     Represents a disposable object that associates a value with an action to be executed upon disposal.
 		/// </summary>
@@ -68,7 +67,7 @@ public sealed partial class SyncProvider
 		/// </summary>
 		public void Dispose()
 		{
-			// Ändern Sie diesen Code nicht. Fügen Sie Bereinigungscode in der Methode "Dispose(bool disposing)" ein.
+			/* Ändern Sie diesen Code nicht. Fügen Sie Bereinigungscode in der Methode "Dispose(bool disposing)" ein. */
 			Dispose(true);
 			GC.SuppressFinalize(this);
 		}
@@ -100,6 +99,31 @@ public sealed partial class SyncProvider
 	}
 
 
+	// Helper class to hold the placeholder list and identity references.
+	private sealed class InFlightPlaceholderTransfer : IDisposable
+	{
+		private CloudFilterAPI.SafeHandlers.SafePlaceHolderList _placeholders { get; }
+		private List<StringPtr> _identityList { get; }
+		
+
+		public InFlightPlaceholderTransfer(CloudFilterAPI.SafeHandlers.SafePlaceHolderList placeholders, List<StringPtr> identityList)
+		{
+			_placeholders = placeholders;
+			_identityList = identityList;
+		}
+
+
+		public void Dispose()
+		{
+			/* SafePlaceHolderList.Dispose frees the unmanaged FileIdentity pointers. */
+			_placeholders.Dispose();
+			
+			/* Clear the identity list to release managed references. */
+			_identityList.Clear();
+		}
+	}
+	
+
 	// --------------------------------------------------------------------------------------------
 	// PROPERTIES
 	// --------------------------------------------------------------------------------------------
@@ -111,22 +135,25 @@ public sealed partial class SyncProvider
 	public event EventHandler<FileProgressEventArgs>? FileProgressEvent;
 
 	//public readonly ActionBlock<FileChangedEventArgs> fileChangedActionBlock;
+	//private readonly Task _fetchDataWorkerThread;
+	//private DateTime _clipboardTime;
+	//private readonly ConcurrentDictionary<Guid, DataActions> _fetchDataRunningQueue;
 
 	private readonly string[] ExcludedProcessesForFetchPlaceholders =
 	[
 		@".*\\SearchProtocolHost\.exe.*", // This process tries to index folders which are just a few seconds before marked as "ENABLE_ON_DEMAND_POPULATION" which results in unwanted repopulation.
-		@".*\\svchost\.exe.*StorSvc" // This process cleans old data. Fetching of placeholders is not required for this process.
+		@".*\\svchost\.exe.*StorSvc"      // This process cleans old data. Fetching of placeholders is not required for this process.
 	];
 
-	private readonly ConcurrentDictionary<Guid, DataActions> _fetchDataRunningQueue;
-
-	//private readonly Task _fetchDataWorkerThread;
 	private readonly ConcurrentDictionary<string, CancellationTokenSource> _fetchPlaceholdersCancellationTokens = new();
-
 	private CldApi.CF_CALLBACK_REGISTRATION[]? _callbackMappings;
-
-	//private DateTime _clipboardTime;
 	private FileSystemWatcher? _watcher;
+	
+	/* A static dictionary to keep placeholder lists alive until safe to dispose. */
+	private static readonly ConcurrentDictionary<string, InFlightPlaceholderTransfer> _inFlightPlaceholders = new();
+
+	/* Adjust this timeout as needed.  Five minutes is often sufficient. */
+	private static readonly TimeSpan PlaceholderRetentionTimeout = TimeSpan.FromMinutes(5);
 
 	#endregion
 
@@ -162,14 +189,15 @@ public sealed partial class SyncProvider
 			
 			var p = CldApi.CF_OPERATION_PARAMETERS.Create(tp);
 			CldApi.CfExecute(opInfo, ref p);
+			
 			return;
 		}
 
 		try
 		{
-			Log.Info("Fetching placeholders ...");
+			Log.Info($"Fetching placeholders for path \"{CallbackInfo.NormalizedPath}\" ...");
 
-			var opInfo = CreateOperationInfo(CallbackInfo, CldApi.CF_OPERATION_TYPE.CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS);
+			var opInfo      = CreateOperationInfo(CallbackInfo, CldApi.CF_OPERATION_TYPE.CF_OPERATION_TYPE_TRANSFER_PLACEHOLDERS);
 			var cancelFetch = _syncContext.ServerProvider.Status != ServerProviderStatus.Connected;
 
 			Log.Debug($"opInfo.SyncStatus: {opInfo.SyncStatus.ToString()}");
@@ -181,7 +209,7 @@ public sealed partial class SyncProvider
 				{
 					if (Regex.IsMatch(processInfo.CommandLine, process))
 					{
-						Log.Debug($"FETCH_PLACEHOLDERS Triggered by excluded App: {processInfo.ImagePath}");
+						Log.Debug($"Fetch placeholders triggered by excluded App: {processInfo.ImagePath}");
 						cancelFetch = true;
 						break;
 					}
@@ -190,7 +218,7 @@ public sealed partial class SyncProvider
 
 			if (cancelFetch)
 			{
-				CldApi.CF_OPERATION_PARAMETERS.TRANSFERPLACEHOLDERS TpParam = new()
+				CldApi.CF_OPERATION_PARAMETERS.TRANSFERPLACEHOLDERS tpParam = new()
 				{
 					PlaceholderArray      = IntPtr.Zero,
 					Flags                 = CldApi.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAGS.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_NONE,
@@ -199,16 +227,16 @@ public sealed partial class SyncProvider
 					CompletionStatus      = new NTStatus((uint)CloudFilterAPI.NtStatus.STATUS_CLOUD_FILE_NETWORK_UNAVAILABLE)
 				};
 
-				var opParams = CldApi.CF_OPERATION_PARAMETERS.Create(TpParam);
+				var opParams      = CldApi.CF_OPERATION_PARAMETERS.Create(tpParam);
 				var executeResult = CldApi.CfExecute(opInfo, ref opParams);
 
-				Log.Debug($"executeResult: {executeResult.ToString()}");
+				Log.Debug($"Fetch execution result: {executeResult.ToString()}");
 
 				return;
 			}
 
 			var relativePath = GetRelativePath(CallbackInfo);
-			var fullPath     = GetLocalFullPath(CallbackInfo);
+			//var fullPath = GetLocalFullPath(CallbackInfo);
 
 			CancellationTokenSource ctx = new();
 
@@ -218,11 +246,11 @@ public sealed partial class SyncProvider
 				return ctx;
 			});
 
-			FETCH_PLACEHOLDERS_Internal(relativePath, opInfo, CallbackParameters.FetchPlaceholders.Pattern, ctx.Token);
+			FetchPlaceholdersInternal(relativePath, opInfo, CallbackParameters.FetchPlaceholders.Pattern, ctx.Token);
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"FETCH_PLACEHOLDERS exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -248,29 +276,19 @@ public sealed partial class SyncProvider
 	/// <param name="cancellationToken">
 	///     A token to monitor for cancellation requests, ensuring the operation can be gracefully terminated if necessary.
 	/// </param>
-	private async void FETCH_PLACEHOLDERS_Internal(string relativePath, CldApi.CF_OPERATION_INFO opInfo, string pattern, CancellationToken cancellationToken)
+	private async void FetchPlaceholdersInternal(string relativePath, CldApi.CF_OPERATION_INFO opInfo, string pattern, CancellationToken cancellationToken)
 	{
 		try
 		{
-			Log.Debug("Fetch Placeholder: " + relativePath);
+			Log.Debug($"Fetching placeholders for path \"{relativePath}\" ...");
 
-			var fullPath = GetLocalFullPath(relativePath);
-
-			//TODO: Transfer Placeholders in Chunks for large directories.
-			// Question: What is considere a large directory? > 1000 entries? Let ServerProvider decide
-			// - Get partial file list of large Directory.
-			// - Add to partial and full list.
-			// - Send partial list to  CfExecute.
-			// - Clear partial list.
-			// - Get next partial file list
-			// - Repeat until completed.
-			// - Compare full list after last CFExecute.
-			// - Use pattern
-
-			using CloudFilterAPI.SafeHandlers.SafePlaceHolderList infos = new();
+			/* Allocate a placeholder list and a list to hold identity pointers. */
+			//var fullPath         = GetLocalFullPath(relativePath);
+			var infos            = new CloudFilterAPI.SafeHandlers.SafePlaceHolderList();
+			var identityList     = new List<StringPtr>();
 			var completionStatus = CloudFilterAPI.NtStatus.STATUS_SUCCESS;
 
-			/* Get Filelist from Server. */
+			/* Get the server file list. */
 			var getServerFileListResult = await GetServerFileListAsync(relativePath, cancellationToken);
 			if (!getServerFileListResult.Succeeded)
 			{
@@ -278,10 +296,15 @@ public sealed partial class SyncProvider
 			}
 			else
 			{
-				/* Create CreatePlaceholderInfo for each Cloud File. */
+				/* Build placeholder info and collect StringPtr identities. */
 				foreach (var placeholder in getServerFileListResult.Data)
 				{
-					var (placeholderInfo, _) = CloudFilterAPI.CreatePlaceholderInfo(placeholder);
+					var (placeholderInfo, identity) = CloudFilterAPI.CreatePlaceholderInfo(placeholder);
+					if (identity != null)
+					{
+						identityList.Add(identity);
+					}
+
 					infos.Add(placeholderInfo);
 					if (cancellationToken.IsCancellationRequested)
 					{
@@ -290,42 +313,90 @@ public sealed partial class SyncProvider
 				}
 			}
 
-			/* Directorys which do not exist on Server should not throw any exception. */
+			/* Directories that are not cloud files should not throw an exception. */
 			if (completionStatus == CloudFilterAPI.NtStatus.STATUS_NOT_A_CLOUD_FILE)
 			{
 				completionStatus = CloudFilterAPI.NtStatus.STATUS_SUCCESS;
 			}
 
-			var data = new LocalChangedData { ChangeType = ExtendedWatcherChangeTypes.All, FullPath = fullPath };
 			var total = (uint)infos.Count;
-		
-			CldApi.CF_OPERATION_PARAMETERS.TRANSFERPLACEHOLDERS TpParam = new()
-			{
-				PlaceholderArray      = infos,
-				Flags                 = CldApi.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAGS.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION,
-				PlaceholderCount      = total,
-				PlaceholderTotalCount = total,
-				CompletionStatus      = new NTStatus((uint)completionStatus)
-			};
 			
-			Log.Debug($">>>> ConnectionKey: {opInfo.ConnectionKey}");
-			Log.Debug($">>>> CorrelationVector: {opInfo.CorrelationVector}");
-			Log.Debug($">>>> RequestKey: {opInfo.RequestKey}");
-			Log.Debug($">>>> StructSize: {opInfo.StructSize}");
-			Log.Debug($">>>> SyncStatus: {opInfo.SyncStatus}");
-			Log.Debug($">>>> TransferKey: {opInfo.TransferKey}");
-			Log.Debug($">>>> Type: {opInfo.Type}");
-		
-			var opParams = CldApi.CF_OPERATION_PARAMETERS.Create(TpParam);
-			var executeResult = CldApi.CfExecute(opInfo, ref opParams);
-			
-			Log.Debug($"CfExecute result: {executeResult.ToString()}");
+			Log.Debug($"[CF_OPERATION_INFO ConnectionKey={opInfo.ConnectionKey}, CorrelationVector={opInfo.CorrelationVector}, RequestKey={opInfo.RequestKey}, StructSize={opInfo.StructSize}, SyncStatus={opInfo.SyncStatus}, TransferKey={opInfo.TransferKey}, Type={opInfo.Type}]");
+			Log.Debug($"infos.Count: {total}");
 
-			_fetchPlaceholdersCancellationTokens.TryRemove(relativePath, out _);
+			if (total == 0)
+			{
+				/* If no placeholders, call CfExecute with a NULL array. */
+				var tp = new CldApi.CF_OPERATION_PARAMETERS.TRANSFERPLACEHOLDERS
+				{
+					PlaceholderArray      = IntPtr.Zero,
+					Flags                 = CldApi.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAGS.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION,
+					PlaceholderCount      = 0,
+					PlaceholderTotalCount = 0,
+					CompletionStatus      = new NTStatus((uint)completionStatus)
+				};
+
+				var opParams = CldApi.CF_OPERATION_PARAMETERS.Create(tp);
+				var result   = CldApi.CfExecute(opInfo, ref opParams);
+
+				Log.Debug($"CfExecute result: {result}");
+
+				/* Ensure identities aren’t collected before CfExecute finishes. */
+				GC.KeepAlive(identityList);
+
+				/* We’re not storing this list, so just clear the managed references. */
+				identityList.Clear();
+				infos.Dispose();
+
+				_fetchPlaceholdersCancellationTokens.TryRemove(relativePath, out _);
+			}
+			else
+			{
+				/* Otherwise, call CfExecute with the populated placeholder list. */
+				var tp = new CldApi.CF_OPERATION_PARAMETERS.TRANSFERPLACEHOLDERS
+				{
+					PlaceholderArray      = infos,
+					Flags                 = CldApi.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAGS.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION,
+					PlaceholderCount      = total,
+					PlaceholderTotalCount = total,
+					CompletionStatus      = new NTStatus((uint)completionStatus)
+				};
+
+				var opParams      = CldApi.CF_OPERATION_PARAMETERS.Create(tp);
+				var executeResult = CldApi.CfExecute(opInfo, ref opParams);
+
+				Log.Debug($"Fetch execution result: {executeResult.ToString()}");
+
+				/* Ensure identities aren’t collected before CfExecute finishes. */
+				GC.KeepAlive(identityList);
+
+				/* Dispose any previous in-flight placeholder transfer for this path. */
+				if (_inFlightPlaceholders.TryRemove(relativePath, out var oldTransfer))
+				{
+					oldTransfer.Dispose();
+				}
+
+				/* Store the current placeholder list and identity references so they stay alive. */
+				var newTransfer = new InFlightPlaceholderTransfer(infos, identityList);
+				_inFlightPlaceholders[relativePath] = newTransfer;
+
+				/* Schedule the transfer to be disposed after a timeout. */
+				_ = Task.Run(async () =>
+				{
+					await Task.Delay(PlaceholderRetentionTimeout, cancellationToken);
+					if (_inFlightPlaceholders.TryRemove(relativePath, out var transfer))
+					{
+						transfer.Dispose();
+					}
+				}, cancellationToken);
+
+				/* Remove the cancellation token entry now that the operation has finished. */
+				_fetchPlaceholdersCancellationTokens.TryRemove(relativePath, out _);
+			}
 		}
 		catch (Exception e)
 		{
-			Log.Error($"FETCH_PLACEHOLDERS_Internal exception thrown: {e.Message}");
+			Log.Error($"Exception caught: {e.Message}");
 		}
 	}
 
@@ -350,18 +421,18 @@ public sealed partial class SyncProvider
 
 		try
 		{
-			Log.Debug("Cancel Fetch Placeholders " + CallbackInfo.NormalizedPath);
+			Log.Debug($"Canceling fetching placeholders for path \"{CallbackInfo.NormalizedPath}\" ...");
 
 			if (_fetchPlaceholdersCancellationTokens.TryRemove(GetRelativePath(CallbackInfo), out var ctx))
 			{
 				ctx.Cancel();
 			}
 
-			Log.Debug("Fetch Placeholder Cancelled" + CallbackInfo.NormalizedPath);
+			Log.Debug($"Placeholder fetching cancelled for path \"{CallbackInfo.NormalizedPath}\" ...");
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"CANCEL_FETCH_PLACEHOLDERS exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -396,7 +467,7 @@ public sealed partial class SyncProvider
 
 		try
 		{
-			Log.Info("Fetching data ...");
+			Log.Debug($"Fetching data for path \"{CallbackInfo.NormalizedPath}\" ...");
 
 			var length        = CallbackParameters.FetchData.RequiredLength;
 			var offset        = CallbackParameters.FetchData.RequiredFileOffset;
@@ -407,11 +478,12 @@ public sealed partial class SyncProvider
 			var id            = GetFetchID(CallbackInfo, CallbackParameters);
 			var fileIdentity  = CloudFileIdentity.Deserialize(CallbackInfo.FileIdentity);
 			var versionId     = fileIdentity?.VersionInfoID ?? fileIdentity?.VersionID;
+			
 			Task.Run(async () => { await FetchFile(id, connectionKey, transferKey, path, size, versionId, offset, length); });
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"FETCH_DATA exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -439,13 +511,13 @@ public sealed partial class SyncProvider
 
 		try
 		{
-			Log.Info("Canceling fetch data ...");
+			Log.Debug($"Canceling fetch data for path \"{CallbackInfo.NormalizedPath}\" ...");
 			var id = GetFetchID(CallbackInfo, CallbackParameters);
 			CancelFetch(id);
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"CANCEL_FETCH_DATA exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -474,11 +546,11 @@ public sealed partial class SyncProvider
 
 		try
 		{
-			Log.Debug("NOTIFY_FILE_OPEN_COMPLETION: " + CallbackInfo.NormalizedPath);
+			Log.Debug($"Notifying file open completion for path \"{CallbackInfo.NormalizedPath}\" ...");
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"NOTIFY_FILE_OPEN_COMPLETION exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -507,11 +579,11 @@ public sealed partial class SyncProvider
 
 		try
 		{
-			Log.Debug("NOTIFY_FILE_CLOSE_COMPLETION: " + CallbackInfo.NormalizedPath);
+			Log.Debug($"Notifying file close completion for path \"{CallbackInfo.NormalizedPath}\" ...");
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"NOTIFY_FILE_CLOSE_COMPLETION exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -538,6 +610,8 @@ public sealed partial class SyncProvider
 			return;
 		}
 
+		Log.Debug($"Notifying delete for path \"{CallbackInfo.NormalizedPath}\" ...");
+		
 		try
 		{
 			var connectionKey = CallbackInfo.ConnectionKey;
@@ -555,7 +629,7 @@ public sealed partial class SyncProvider
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"NOTIFY_DELETE exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -581,6 +655,8 @@ public sealed partial class SyncProvider
 			return;
 		}
 
+		Log.Debug($"Notifying delete completion for path \"{CallbackInfo.NormalizedPath}\" ...");
+		
 		try
 		{
 			var path = GetCloudPath(CallbackInfo);
@@ -591,7 +667,7 @@ public sealed partial class SyncProvider
 
 			_filesToRestore.Remove(path);
 
-			/* restore the deleted file if there is no delete permission. */
+			/* Restore the deleted file if there is no delete permission. */
 			Task.Run(async () =>
 			{
 				try
@@ -601,13 +677,13 @@ public sealed partial class SyncProvider
 				}
 				catch
 				{
-					// ignore exception
+					/* ignore exception */
 				}
 			});
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"NOTIFY_DELETE_COMPLETION exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -636,11 +712,13 @@ public sealed partial class SyncProvider
 			return;
 		}
 
+		Log.Debug($"Notifying rename for path \"{CallbackInfo.NormalizedPath}\" ...");
+		
 		try
 		{
 			var connectionKey = CallbackInfo.ConnectionKey;
-			var transferKey = CallbackInfo.TransferKey;
-			var path = GetLocalFullPath(CallbackInfo);
+			var transferKey   = CallbackInfo.TransferKey;
+			var path          = GetLocalFullPath(CallbackInfo);
 			var isLocalTarget = !CallbackParameters.Rename.TargetPath.StartsWith(_syncContext.LocalRootFolderNormalized, StringComparison.CurrentCultureIgnoreCase);
 
 			if (isLocalTarget)
@@ -666,7 +744,7 @@ public sealed partial class SyncProvider
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"NOTIFY_RENAME exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -694,6 +772,8 @@ public sealed partial class SyncProvider
 			return;
 		}
 
+		Log.Debug($"Notifying rename completion for path \"{CallbackInfo.NormalizedPath}\" ...");
+		
 		try
 		{
 			var isLocalTarget = !CallbackParameters.Rename.TargetPath.StartsWith(_syncContext.LocalRootFolderNormalized, StringComparison.CurrentCultureIgnoreCase);
@@ -724,21 +804,21 @@ public sealed partial class SyncProvider
 			{
 				try
 				{
-					var fileInfo = await _fileService.GetFileOrFolderInfo(TokenStorage.TeamID, path) ?? throw new InvalidOperationException();
-					// update placeholder
-					var placeHolder = new Placeholder(fileInfo.File, StringHelper.GetParentPath(path));
+					var fileInfo         = await _fileService.GetFileOrFolderInfo(TokenStorage.TeamID, path) ?? throw new InvalidOperationException();
+					var placeHolder      = new Placeholder(fileInfo.File, StringHelper.GetParentPath(path));
 					var localPlaceholder = new CloudFilterAPI.ExtendedPlaceholderState(localPath);
+					
 					localPlaceholder.UpdatePlaceholder(placeHolder, CldApi.CF_UPDATE_FLAGS.CF_UPDATE_FLAG_MARK_IN_SYNC);
 				}
 				catch
 				{
-					// ignore exception
+					/* ignore exception */
 				}
 			});
 		}
 		catch (Exception ex)
 		{
-			Log.Error($"NOTIFY_RENAME_COMPLETION exception thrown: {ex.Message}");
+			Log.Error($"Exception caught: {ex.Message}");
 		}
 		finally
 		{
@@ -947,7 +1027,7 @@ public sealed partial class SyncProvider
 					}
 					catch (Exception ex)
 					{
-						Log.Error($"FileSystemWatcher_OnCreated Error : {e.FullPath}: {ex.Message}");
+						Log.Error($"Exception caught: {e.FullPath}: {ex.Message}");
 					}
 				});
 			}
@@ -955,7 +1035,7 @@ public sealed partial class SyncProvider
 		catch (Exception ex)
 		{
 			/* Handle exceptions (e.g., file not found, access denied, etc.) */
-			Log.Error($"FileSystemWatcher_OnCreated - Error checking path: {ex.Message}");
+			Log.Error($"Exception caught: Error checking path: {ex.Message}");
 		}
 	}
 	

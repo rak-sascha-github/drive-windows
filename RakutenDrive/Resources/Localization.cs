@@ -17,7 +17,7 @@ internal class Localization
 		{
 			try
 			{
-				var version = string.Format(Strings.about_window_version, Assembly.GetExecutingAssembly().GetName().Version.ToString());
+				var version = string.Format(Strings.about_window_version, Assembly.GetExecutingAssembly().GetName().Version?.ToString());
 				return Global.BuildType switch
 				{
 					BuildType.Development => version + "-DEV",

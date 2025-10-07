@@ -5,7 +5,8 @@ pushd "%~dp0"
 rem --- config ---
 set "PROJECT=RakutenDrive\RakutenDrive.csproj"
 set "OUT=%~dp0artifacts\publish\win-x64"
-set "ZIP=%~dp0artifacts\publish\RakutenDrive-win-x64.zip"
+rem Remove the fixed ZIP declaration – we'll build it dynamically
+rem set "ZIP=%~dp0artifacts\publish\RakutenDrive-win-x64.zip"
 
 rem --- clear output folder ---
 echo Cleaning "%OUT%"...
@@ -29,6 +30,20 @@ if not "%ERR%"=="0" (
   popd
   exit /b %ERR%
 )
+
+rem --- compute the Build and Revision numbers from the published assembly ---
+for /F "tokens=1-4 delims=." %%A in ('
+  powershell -NoLogo -NoProfile -Command ^
+    "[System.Reflection.AssemblyName]::GetAssemblyName((Join-Path '%OUT%' 'RakutenDrive.dll')).Version.ToString()"
+') do (
+  set MAJOR=%%A
+  set MINOR=%%B
+  set BUILD=%%C
+  set REVISION=%%D
+)
+
+rem Construct the zip path including the build/revision numbers
+set "ZIP=%~dp0artifacts\publish\RakutenDrive-win-x64-%MAJOR%_%MINOR%_%BUILD%_%REVISION%.zip"
 
 rem --- zip contents of OUT (without the OUT folder itself) ---
 echo Creating zip "%ZIP%"...
