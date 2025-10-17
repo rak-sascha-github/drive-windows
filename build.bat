@@ -43,7 +43,7 @@ for /F "tokens=1-4 delims=." %%A in ('
 )
 
 rem Construct the zip path including the build/revision numbers
-set "ZIP=%~dp0artifacts\publish\RakutenDrive-win-x64-%MAJOR%_%MINOR%_%BUILD%_%REVISION%.zip"
+set "ZIP=%~dp0artifacts\publish\RakutenDrive-win-x64-%BUILD%_%REVISION%.zip"
 
 rem --- zip contents of OUT (without the OUT folder itself) ---
 echo Creating zip "%ZIP%"...

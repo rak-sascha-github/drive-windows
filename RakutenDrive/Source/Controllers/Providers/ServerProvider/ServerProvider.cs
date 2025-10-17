@@ -49,7 +49,7 @@ public sealed partial class ServerProvider : IServerFileProvider
 	/// </summary>
 	public class ServerProviderParams
 	{
-		public string ServerPath;
+		public string? ServerPath;
 		public bool UseRecycleBin;
 		public bool UseRecycleBinForChangedFiles;
 		public bool UseTempFilesForUpload;
@@ -66,9 +66,9 @@ public sealed partial class ServerProvider : IServerFileProvider
 	{
 		private readonly ServerProvider _provider;
 		private bool _disposedValue;
-		private FileStream _fileStream;
+		private FileStream? _fileStream;
 		private bool _isClosed;
-		private OpenAsyncParams _openAsyncParams;
+		private OpenAsyncParams? _openAsyncParams;
 
 
 		/// Represents an internal implementation for asynchronously reading files from a server-based file system.
@@ -98,6 +98,11 @@ public sealed partial class ServerProvider : IServerFileProvider
 
 			_openAsyncParams = e;
 			ReadFileOpenResult openResult = new();
+
+			if (_provider._parameter.ServerPath == null || e.RelativeFileName == null)
+			{
+				throw new FileNotFoundException(e.RelativeFileName);
+			}
 
 			var fullPath = Path.Combine(_provider._parameter.ServerPath, e.RelativeFileName);
 
@@ -148,6 +153,12 @@ public sealed partial class ServerProvider : IServerFileProvider
 
 			ReadFileReadResult readResult = new();
 
+			if (_fileStream == null || _openAsyncParams == null)
+			{
+				Log.Warn("FileStream or OpenAsyncParams is null.");
+				return readResult;
+			}
+
 			try
 			{
 				_fileStream.Position = offset;
@@ -172,6 +183,12 @@ public sealed partial class ServerProvider : IServerFileProvider
 		{
 			ReadFileCloseResult closeResult = new();
 
+			if (_fileStream == null)
+			{
+				Log.Warn("FileStream is null.");
+				return Task.FromResult(closeResult);
+			}
+			
 			try
 			{
 				_fileStream.Close();
@@ -252,10 +269,10 @@ public sealed partial class ServerProvider : IServerFileProvider
 		{
 			try
 			{
-				if (!_isClosed)
+				if (_fileStream != null && !_isClosed)
 				{
 					_isClosed = true;
-					await _fileStream?.FlushAsync();
+					await _fileStream.FlushAsync();
 					_fileStream?.Close();
 				}
 			}

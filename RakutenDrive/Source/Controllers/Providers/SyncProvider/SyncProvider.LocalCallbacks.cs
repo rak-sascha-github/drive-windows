@@ -296,19 +296,22 @@ public sealed partial class SyncProvider
 			}
 			else
 			{
-				/* Build placeholder info and collect StringPtr identities. */
-				foreach (var placeholder in getServerFileListResult.Data)
+				if (getServerFileListResult.Data != null)
 				{
-					var (placeholderInfo, identity) = CloudFilterAPI.CreatePlaceholderInfo(placeholder);
-					if (identity != null)
+					/* Build placeholder info and collect StringPtr identities. */
+					foreach (var placeholder in getServerFileListResult.Data)
 					{
-						identityList.Add(identity);
-					}
+						var (placeholderInfo, identity) = CloudFilterAPI.CreatePlaceholderInfo(placeholder);
+						if (identity != null)
+						{
+							identityList.Add(identity);
+						}
 
-					infos.Add(placeholderInfo);
-					if (cancellationToken.IsCancellationRequested)
-					{
-						return;
+						infos.Add(placeholderInfo);
+						if (cancellationToken.IsCancellationRequested)
+						{
+							return;
+						}
 					}
 				}
 			}
@@ -319,7 +322,7 @@ public sealed partial class SyncProvider
 				completionStatus = CloudFilterAPI.NtStatus.STATUS_SUCCESS;
 			}
 
-			var total = (uint)infos.Count;
+			var total = (long)infos.Count;
 			
 			Log.Debug($"[CF_OPERATION_INFO ConnectionKey={opInfo.ConnectionKey}, CorrelationVector={opInfo.CorrelationVector}, RequestKey={opInfo.RequestKey}, StructSize={opInfo.StructSize}, SyncStatus={opInfo.SyncStatus}, TransferKey={opInfo.TransferKey}, Type={opInfo.Type}]");
 			Log.Debug($"infos.Count: {total}");
@@ -357,7 +360,7 @@ public sealed partial class SyncProvider
 				{
 					PlaceholderArray      = infos,
 					Flags                 = CldApi.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAGS.CF_OPERATION_TRANSFER_PLACEHOLDERS_FLAG_DISABLE_ON_DEMAND_POPULATION,
-					PlaceholderCount      = total,
+					PlaceholderCount      = (uint)total,
 					PlaceholderTotalCount = total,
 					CompletionStatus      = new NTStatus((uint)completionStatus)
 				};

@@ -141,6 +141,8 @@ internal class APIHTTPClient
 
 		var content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
 		var response = await _client.PostAsync(_currentBaseURL + url, content, cancellationToken);
+		
+		Log.Debug($"RESPONSE: {response.Headers}");
 
 		if (!isAcceptException)
 		{

@@ -184,7 +184,7 @@ public sealed partial class SyncProvider
 		_syncContext = new SyncContext
 		{
 			LocalRootFolder = parameter.LocalDataPath,
-			LocalRootFolderNormalized = parameter.LocalDataPath.Remove(0, 2),
+			LocalRootFolderNormalized = parameter.LocalDataPath?.Remove(0, 2),
 			ServerProvider = parameter.ServerProvider,
 			SyncProviderParameter = parameter,
 			SyncProvider = this
@@ -281,7 +281,7 @@ public sealed partial class SyncProvider
 	/// </remarks>
 	public string GetSyncRootID()
 	{
-		var syncRootID = _syncContext.SyncProviderParameter.ProviderInfo.ProviderId.ToString();
+		var syncRootID = _syncContext.SyncProviderParameter.ProviderInfo?.ProviderId.ToString();
 		syncRootID += @"!";
 		syncRootID += WindowsIdentity.GetCurrent().User?.Value;
 		syncRootID += @"!";
@@ -570,7 +570,7 @@ public sealed partial class SyncProvider
 			return;
 		}
 
-		if (Directory.Exists(_syncContext.LocalRootFolder) == false)
+		if (_syncContext.LocalRootFolder != null && Directory.Exists(_syncContext.LocalRootFolder) == false)
 		{
 			Log.Debug($"Creating Local Root Folder: {_syncContext.LocalRootFolder}");
 			Directory.CreateDirectory(_syncContext.LocalRootFolder);

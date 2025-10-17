@@ -395,6 +395,7 @@ public enum SyncMode
 ///     The Dynamic Placeholder provides a way to supply a already downloaded remote placeholder or to get the remote placeholder on
 ///     demand instead of always downloading remote date even if it may not be required.
 /// </summary>
+[SuppressMessage("Interoperability", "CA1416:Validate platform compatibility")]
 public class DynamicServerPlaceholder
 {
 	private readonly bool _isDirectory;
@@ -417,20 +418,19 @@ public class DynamicServerPlaceholder
 	}
 
 
-	public async Task<Placeholder> GetPlaceholder()
+	public async Task<Placeholder?> GetPlaceholder()
 	{
-		if (_placeholder == null && !string.IsNullOrWhiteSpace(_relativePath))
+		if (_syncContext != null && _placeholder == null && !string.IsNullOrWhiteSpace(_relativePath))
 		{
 			if (!_syncContext.SyncProvider.IsExcludedFile(_relativePath))
 			{
 				var getFileResult = await _syncContext.ServerProvider.GetFileInfo(_relativePath, _isDirectory);
 				_placeholder = getFileResult.Placeholder;
 
-				// Handle new local file or file on server deleted
+				/* Handle new local file or file on server deleted. */
 				if (getFileResult.Status == CloudFilterAPI.NtStatus.STATUS_NOT_A_CLOUD_FILE)
-					// File not found on Server.... New local file or File deleted on Server.
-					// Do not raise any exception and continue processing
 				{
+					/* File not found on Server... New local file or File deleted on Server. Do not raise any exception and continue processing. */
 					_placeholder = null;
 				}
 				else
@@ -458,7 +458,7 @@ public class DynamicServerPlaceholder
 /// </summary>
 public class Placeholder : BasicFileInfo
 {
-	public string ETag;
+	public string? ETag;
 	public CloudFileIdentity FileIdentity;
 	public long FileSize;
 
@@ -576,7 +576,7 @@ public class MoveFileResult : GenericResult
 /// </summary>
 public class CreateFileResult : GenericResult
 {
-	public Placeholder Placeholder;
+	public Placeholder? Placeholder;
 }
 
 
@@ -590,8 +590,7 @@ public class CreateFileResult : GenericResult
 public class GenericResult
 {
 	private CloudFilterAPI.NtStatus _status;
-	public string Message;
-
+	public string? Message;
 	public bool Succeeded;
 
 
@@ -712,9 +711,10 @@ public class GenericResult
 ///     Represents the result of an operation, encapsulating information about its success status, state,
 ///     and an optional message for better contextual understanding.
 /// </summary>
+[SuppressMessage("Interoperability", "CA1416:Validate platform compatibility")]
 public class GenericResult<T> : GenericResult
 {
-	public T Data;
+	public T? Data;
 
 
 	public GenericResult()
@@ -768,7 +768,7 @@ public class GenericResult<T> : GenericResult
 /// </summary>
 public class GetNextResult : GenericResult
 {
-	public Placeholder Placeholder;
+	public Placeholder? Placeholder;
 
 
 	public GetNextResult()
@@ -791,8 +791,8 @@ public class GetNextResult : GenericResult
 public class BasicSyncProviderInfo
 {
 	public Guid ProviderId;
-	public string ProviderName;
-	public string ProviderVersion;
+	public string? ProviderName;
+	public string? ProviderVersion;
 }
 
 
@@ -802,9 +802,9 @@ public class BasicSyncProviderInfo
 /// </summary>
 public class SyncProviderParameters
 {
-	public string LocalDataPath;
-	public BasicSyncProviderInfo ProviderInfo;
-	public IServerFileProvider ServerProvider;
+	public string? LocalDataPath;
+	public BasicSyncProviderInfo? ProviderInfo;
+	public required IServerFileProvider ServerProvider;
 }
 
 
@@ -814,7 +814,7 @@ public class SyncProviderParameters
 /// </summary>
 public class ServerProviderStateChangedEventArgs : EventArgs
 {
-	public string Message;
+	public string? Message;
 	public ServerProviderStatus Status;
 
 
@@ -847,8 +847,8 @@ public class ServerProviderStateChangedEventArgs : EventArgs
 public class FileChangedEventArgs : EventArgs
 {
 	public WatcherChangeTypes ChangeType;
-	public string OldRelativePath;
-	public Placeholder Placeholder;
+	public string? OldRelativePath;
+	public Placeholder? Placeholder;
 	public bool ResyncSubDirectories;
 }
 
@@ -860,7 +860,7 @@ public class FileChangedEventArgs : EventArgs
 /// </summary>
 public class FailedData
 {
-	public Exception LastException;
+	public Exception? LastException;
 	public DateTime LastTry;
 	public DateTime NextTry;
 	public int RetryCount;
@@ -949,12 +949,12 @@ public class SyncContext
 	/// <summary>
 	///     Absolute Path to the local Root Folder where the cached files are stored.
 	/// </summary>
-	public string LocalRootFolder;
+	public string? LocalRootFolder;
 
-	public string LocalRootFolderNormalized;
-	public IServerFileProvider ServerProvider;
-	public SyncProvider SyncProvider;
-	public SyncProviderParameters SyncProviderParameter;
+	public string? LocalRootFolderNormalized;
+	public required IServerFileProvider ServerProvider;
+	public required SyncProvider SyncProvider;
+	public required SyncProviderParameters SyncProviderParameter;
 }
 
 
@@ -965,13 +965,13 @@ public class SyncContext
 /// </summary>
 public class DataActions
 {
-	public CancellationTokenSource CancellationTokenSource;
+	public CancellationTokenSource? CancellationTokenSource;
 	public long FileOffset;
 	public Guid guid = Guid.NewGuid();
-	public string Id;
+	public string? Id;
 	public bool isCompleted;
 	public long Length;
-	public string NormalizedPath;
+	public string? NormalizedPath;
 	public byte PriorityHint;
 	public CldApi.CF_REQUEST_KEY RequestKey;
 	public CldApi.CF_TRANSFER_KEY TransferKey;
@@ -984,7 +984,7 @@ public class DataActions
 /// </summary>
 public class FetchRange
 {
-	public string NormalizedPath;
+	public string? NormalizedPath;
 	public byte PriorityHint;
 	public long RangeEnd;
 	public long RangeStart;
@@ -1016,7 +1016,7 @@ public class DeleteAction
 {
 	public bool IsDirectory;
 	public CldApi.CF_OPERATION_INFO OpInfo;
-	public string RelativePath;
+	public string? RelativePath;
 }
 
 

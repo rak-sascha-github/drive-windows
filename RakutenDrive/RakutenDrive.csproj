@@ -145,4 +145,7 @@
       <SubType>Designer</SubType>
     </ApplicationDefinition>
   </ItemGroup>
+    <PropertyGroup>
+        <Deterministic>false</Deterministic>
+    </PropertyGroup>
 </Project>
