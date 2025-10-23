@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Amazon;
@@ -14,6 +15,7 @@ using RakutenDrive.Resources;
 using RakutenDrive.Services;
 using RakutenDrive.Utils;
 using RakutenDrive.Utils.CredentialManagement;
+using Vanara.PInvoke;
 
 
 namespace RakutenDrive.Source.Services;
@@ -89,13 +91,17 @@ internal class FileOperations
 
 
 	/// <summary>
-	///     Creates a new folder in the local directory and synchronizes it with the cloud storage.
+	///     Creates a folder at the specified local path and synchronizes it with the cloud storage.
+	///     This method ensures that the path corresponds to a directory and interacts with the cloud service
+	///     to create the folder and fetch updated metadata.
 	/// </summary>
-	/// <param name="localPath">The local path where the folder is to be created. This path must refer to a directory.</param>
+	/// <param name="localPath">
+	///     The full local path where the folder is to be created. The path must represent a directory.
+	/// </param>
 	/// <returns>
-	///     A task representing the asynchronous operation. Completes when the folder has been created and its state synchronized with the cloud.
+	///     A task that represents the asynchronous operation of creating the folder. If successful,
+	///     the folder is created locally and synchronized with the cloud service.
 	/// </returns>
-	/// <exception cref="InvalidOperationException">Thrown if the specified path is not a directory.</exception>
 	public async Task CreateFolder(string localPath)
 	{
 		var isDirectory = File.GetAttributes(localPath).HasFlag(FileAttributes.Directory);
@@ -104,8 +110,8 @@ internal class FileOperations
 			throw new InvalidOperationException("Cannot create folder, path is not a directory.");
 		}
 
-		var name       = Path.GetFileName(localPath);
-		var cloudPath  = LocalPathToCloudPath(localPath, isDirectory);
+		var name = Path.GetFileName(localPath);
+		var cloudPath = LocalPathToCloudPath(localPath, isDirectory);
 		var parentPath = StringHelper.GetParentPath(cloudPath);
 
 		try
@@ -119,12 +125,25 @@ internal class FileOperations
 				var res = await _teamDriveService.CreateTeamFolder(name, parentPath);
 				if (res?.StatusCode == HttpStatusCode.NoContent || res?.StatusCode == HttpStatusCode.OK)
 				{
+					// Build full cloud path for the created folder.
 					var cloudPath2 = parentPath + (parentPath.EndsWith("/") ? string.Empty : "/") + name + (name.EndsWith("/") ? string.Empty : "/");
+					// Fetch fresh metadata from the server.
 					var fileInfo = await _fileService.GetFileOrFolderInfo(TokenStorage.TeamID, cloudPath2);
-					var fileIdentity = CloudFileIdentity.FromCloudFile(fileInfo!.File, parentPath);
-					var localFolderPlaceholder = new CloudFilterAPI.ExtendedPlaceholderState(localPath);
-
-					localFolderPlaceholder.ConvertToPlaceholder(true, fileIdentity);
+					if (fileInfo is not null)
+					{
+						var fileIdentity = CloudFileIdentity.FromCloudFile(fileInfo.File, parentPath);
+						// Create a placeholder from local folder state; mark it in sync to avoid initial hydration.
+						var localState = new CloudFilterAPI.ExtendedPlaceholderState(localPath);
+						var convertResult = localState.ConvertToPlaceholder(true, fileIdentity);
+						if (convertResult.Succeeded)
+						{
+							// Now build a Placeholder from the server metadata and update the local placeholder on a new state object.
+							var updatedPlaceholder = new Placeholder(fileInfo.File, parentPath);
+							// Use a new ExtendedPlaceholderState to avoid handling on the disposed state from ConvertToPlaceholder.
+							using var updateState = new CloudFilterAPI.ExtendedPlaceholderState(localPath);
+							updateState.UpdatePlaceholder(updatedPlaceholder, CldApi.CF_UPDATE_FLAGS.CF_UPDATE_FLAG_MARK_IN_SYNC);
+						}
+					}
 				}
 
 				if (res?.Message != null)
@@ -132,7 +151,6 @@ internal class FileOperations
 					ShowMessage(res.Message);
 				}
 			}
-
 
 			await AwaitTask(localPath, PerformTask());
 		}
@@ -172,14 +190,15 @@ internal class FileOperations
 		try
 		{
 			_filesToUpload.Add(localPath);
- 
-			var name        = Path.GetFileName(localPath);
-			var cloudPath   = LocalPathToCloudPath(localPath, isDirectory);
-			var parentPath  = StringHelper.GetParentPath(cloudPath);
-			var jwtToken    = TokenStorage.GetAccessToken();
+
+			var name = Path.GetFileName(localPath);
+			var cloudPath = LocalPathToCloudPath(localPath, isDirectory);
+			var parentPath = StringHelper.GetParentPath(cloudPath);
+			var jwtToken = TokenStorage.GetAccessToken();
 			var jsonPayload = JWTParser.Parse(jwtToken);
-			
+
 			_uploadPool.Wait(_cancellationTokenSource.Token);
+			// Wait for any other operations on this directory to finish.
 			WaitForExistingTask(Path.GetDirectoryName(localPath)!);
 
 			async Task PerformTask()
@@ -189,12 +208,13 @@ internal class FileOperations
 					throw new FileNotFoundException("File does not exist", localPath);
 				}
 
+				// Prepare a dummy check upload request (size set to 0 here; real size is determined by S3 service)
 				var checkFileUploadRequest = new CheckFileUploadRequest
 				{
-					File     = [new FileInfoCheckFile { Path = name, Size = 0 }],
-					Path     = parentPath,
-					Replace  = false,
-					Token    = string.Empty,
+					File = [new FileInfoCheckFile { Path = name, Size = 0 }],
+					Path = parentPath,
+					Replace = false,
+					Token = string.Empty,
 					UploadID = string.Empty
 				};
 
@@ -204,7 +224,7 @@ internal class FileOperations
 					if (checkFileUploadRespose != null)
 					{
 						var currentFolder = Path.GetDirectoryName(localPath);
-						var folderName    = Path.GetFileName(currentFolder) ?? string.Empty;
+						var folderName = Path.GetFileName(currentFolder) ?? string.Empty;
 
 						/* Write activity log. */
 						await _logService.WriteActivityLogs(jsonPayload.TeamID, new ActivityLog.TemplatesActivityLogResponse
@@ -213,12 +233,12 @@ internal class FileOperations
 							[
 								new ActivityLog.TemplateActivityLog
 								{
-									Action   = "action-cloud-viewed-file",
+									Action = "action-cloud-viewed-file",
 									Category = "action-file-operations",
-									Message  = "admin-cloud-team-viewed-file-message",
-									Title    = "admin-cloud-viewed-file-title",
-									UserID   = jsonPayload.UserID,
-									Vars     = new ActivityLog.TemplateActivityLogVars { Name = folderName, Size = "-" }
+									Message = "admin-cloud-team-viewed-file-message",
+									Title = "admin-cloud-viewed-file-title",
+									UserID = jsonPayload.UserID,
+									Vars = new ActivityLog.TemplateActivityLogVars { Name = folderName, Size = "-" }
 								}
 							]
 						});
@@ -227,7 +247,7 @@ internal class FileOperations
 						if (awsTempCredentials != null)
 						{
 							/* Convert string to RegionEndpoint. */
-							var region   = RegionEndpoint.GetBySystemName(checkFileUploadRespose.Region);
+							var region = RegionEndpoint.GetBySystemName(checkFileUploadRespose.Region);
 							var s3Client = new AmazonS3Client(awsTempCredentials.AccessKeyID, awsTempCredentials.SecretAccessKey, awsTempCredentials.SessionToken, region);
 
 							/* Use TransferUtility for uploading the file. */
@@ -236,17 +256,27 @@ internal class FileOperations
 							/* Upload the file. */
 							if (checkFileUploadRespose is { Bucket: not null, File: not null, UploadID: not null })
 							{
-								_ = await AWSS3Service.UploadSingleFileAsync(transferUtility, checkFileUploadRespose.Bucket, checkFileUploadRespose.Prefix + checkFileUploadRespose.File[0].Path, localPath, _cancellationTokenSource.Token);
-								_ = await _fileService.WaitUntil(checkFileUploadRespose.UploadID, _cancellationTokenSource.Token);
+								await AWSS3Service.UploadSingleFileAsync(transferUtility, checkFileUploadRespose.Bucket, checkFileUploadRespose.Prefix + checkFileUploadRespose.File[0].Path, localPath, _cancellationTokenSource.Token);
+								await _fileService.WaitUntil(checkFileUploadRespose.UploadID, _cancellationTokenSource.Token);
 							}
 
+							// After the upload completes, fetch fresh metadata for the uploaded file.
 							var cloudPath2 = parentPath + (parentPath.EndsWith("/") ? string.Empty : "/") + name;
 							var fileInfo = await _fileService.GetFileOrFolderInfo(TokenStorage.TeamID, cloudPath2);
-							var fileIdentity = CloudFileIdentity.FromCloudFile(fileInfo!.File, parentPath);
-
-							/* Set the status. */
-							var localFolderPlaceholder = new CloudFilterAPI.ExtendedPlaceholderState(localPath);
-							localFolderPlaceholder.ConvertToPlaceholder(true, fileIdentity);
+							if (fileInfo is not null)
+							{
+								var fileIdentity = CloudFileIdentity.FromCloudFile(fileInfo.File, parentPath);
+								// First convert the local file into a placeholder (mark as in sync). Use convert success to decide update.
+								var localState = new CloudFilterAPI.ExtendedPlaceholderState(localPath);
+								var convertResult = localState.ConvertToPlaceholder(true, fileIdentity);
+								if (convertResult.Succeeded)
+								{
+									// Build a Placeholder from the server metadata and update the placeholder using a new state object.
+									var updatedPlaceholder = new Placeholder(fileInfo.File, parentPath);
+									using var updateState = new CloudFilterAPI.ExtendedPlaceholderState(localPath);
+									updateState.UpdatePlaceholder(updatedPlaceholder, CldApi.CF_UPDATE_FLAGS.CF_UPDATE_FLAG_MARK_IN_SYNC);
+								}
+							}
 						}
 					}
 				}
@@ -288,26 +318,16 @@ internal class FileOperations
 				{
 					throw new InvalidOperationException("Cannot rename file, file is in use.");
 				}
-				
-				var path             = LocalPathToCloudPath(localPath, isDirectory);
-				var targetPath       = LocalPathToCloudPath(localTargetPath, isDirectory);
-				var teamID           = TokenStorage.TeamID;
-				var fileInfoRequest  = new FileOrFolderInfoRequest { HostID = teamID, Path = path, IsFolderDetailInfo = path.EndsWith('/') };
-				var fileInfo         = await _fileService.GetFileOrFolderInfo(fileInfoRequest) ?? throw new InvalidOperationException();
+
+				var path = LocalPathToCloudPath(localPath, isDirectory);
+				var targetPath = LocalPathToCloudPath(localTargetPath, isDirectory);
+				var teamID = TokenStorage.TeamID;
+				var fileInfoRequest = new FileOrFolderInfoRequest { HostID = teamID, Path = path, IsFolderDetailInfo = path.EndsWith('/') };
+				var fileInfo = await _fileService.GetFileOrFolderInfo(fileInfoRequest) ?? throw new InvalidOperationException();
 				var fileOrFolderName = StringHelper.GetLastPartOfPath(targetPath);
-				
-				var renameRequest    = new RenameRequest
-				{
-					Name = fileOrFolderName,
-					File = new FileRename
-					{
-						LastModified = fileInfo.File.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-						Path         = fileInfo.File.Path,
-						Size         = fileInfo.File.Size,
-						VersionId    = fileInfo.File.VersionID
-					}, Prefix = StringHelper.GetParentPath(path)
-				};
-				
+
+				var renameRequest = new RenameRequest { Name = fileOrFolderName, File = new FileRename { LastModified = fileInfo.File.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"), Path = fileInfo.File.Path, Size = fileInfo.File.Size, VersionId = fileInfo.File.VersionID }, Prefix = StringHelper.GetParentPath(path) };
+
 				var (renameResponse, statusCode) = await _teamDriveService.RenameTheFileOrFolder(renameRequest, teamID);
 				if (renameResponse != null && renameResponse.TaskID != null && statusCode == HttpStatusCode.OK)
 				{
@@ -316,6 +336,33 @@ internal class FileOperations
 					{
 						throw new InvalidOperationException();
 					}
+
+					// ----- New metadata update logic -----
+					try
+					{
+						// Fetch updated metadata for the renamed item at its new cloud path
+						var newParentCloudPath = StringHelper.GetParentPath(targetPath);
+						var fileInfoNew = await _fileService.GetFileOrFolderInfo(teamID, targetPath);
+						if (fileInfoNew is not null)
+						{
+							var fileIdentityNew = CloudFileIdentity.FromCloudFile(fileInfoNew.File, newParentCloudPath);
+							// Convert the local target path to a placeholder and check success
+							var convertState = new CloudFilterAPI.ExtendedPlaceholderState(localTargetPath);
+							var convertResult = convertState.ConvertToPlaceholder(true, fileIdentityNew);
+							if (convertResult.Succeeded)
+							{
+								var updatedPlaceholder = new Placeholder(fileInfoNew.File, newParentCloudPath);
+								// Use a new state for updating to avoid invalid handles
+								using var updateState = new CloudFilterAPI.ExtendedPlaceholderState(localTargetPath);
+								updateState.UpdatePlaceholder(updatedPlaceholder, CldApi.CF_UPDATE_FLAGS.CF_UPDATE_FLAG_MARK_IN_SYNC);
+							}
+						}
+					}
+					catch
+					{
+						// Ignore update exceptions so a failure in metadata refresh doesn't crash the rename operation
+					}
+					// ----- End metadata update logic -----
 				}
 				else
 				{
@@ -323,8 +370,9 @@ internal class FileOperations
 					{
 						var message = string.Format(Strings.error_no_permission_message_rename, StringHelper.GetLastPartOfPath(path));
 						ShowMessage(Strings.error_general_title_rename, message);
-						throw new InvalidOperationException();
 					}
+
+					throw new InvalidOperationException();
 				}
 			}
 
@@ -349,6 +397,7 @@ internal class FileOperations
 	public async Task MoveFile(string localPath, string localTargetPath)
 	{
 		var isDirectory = File.GetAttributes(localPath).HasFlag(FileAttributes.Directory);
+		// Prevent moving a file that’s currently queued for upload
 		if (!isDirectory && _filesToUpload.Contains(localPath))
 		{
 			throw new InvalidOperationException("Cannot move file, file is in upload queue.");
@@ -366,16 +415,18 @@ internal class FileOperations
 					throw new InvalidOperationException("Cannot move file, file is in use.");
 				}
 
+				// Cloud paths for source and destination
 				var path = LocalPathToCloudPath(localPath, isDirectory);
 				var targetPath = LocalPathToCloudPath(localTargetPath, isDirectory);
 				var parentPath = StringHelper.GetParentPath(path);
 
-				if (parentPath == string.Empty || parentPath == "/")
+				if (string.IsNullOrEmpty(parentPath) || parentPath == "/")
 				{
 					throw new InvalidOperationException();
 				}
 
 				var teamID = TokenStorage.TeamID;
+				// Fetch current file info for last modified etc.
 				var fileInfoRequestMoved = new FileOrFolderInfoRequest { HostID = teamID, Path = path, IsFolderDetailInfo = path.EndsWith('/') };
 				var fileInfo = await _fileService.GetFileOrFolderInfo(fileInfoRequestMoved) ?? throw new InvalidOperationException();
 
@@ -398,6 +449,33 @@ internal class FileOperations
 					{
 						throw new InvalidOperationException();
 					}
+
+					// ----- New metadata update logic -----
+					try
+					{
+						// Fetch metadata for the file/folder at its new cloud location
+						var newParentCloudPath = StringHelper.GetParentPath(targetPath);
+						var fileInfoNew = await _fileService.GetFileOrFolderInfo(teamID, targetPath);
+						if (fileInfoNew is not null)
+						{
+							var fileIdentityNew = CloudFileIdentity.FromCloudFile(fileInfoNew.File, newParentCloudPath);
+							// Convert the local target path to a placeholder (creates one if necessary)
+							var convertState = new CloudFilterAPI.ExtendedPlaceholderState(localTargetPath);
+							var convertResult = convertState.ConvertToPlaceholder(true, fileIdentityNew);
+							if (convertResult.Succeeded)
+							{
+								// Create placeholder with server metadata and update
+								var updatedPlaceholder = new Placeholder(fileInfoNew.File, newParentCloudPath);
+								using var updateState = new CloudFilterAPI.ExtendedPlaceholderState(localTargetPath);
+								updateState.UpdatePlaceholder(updatedPlaceholder, CldApi.CF_UPDATE_FLAGS.CF_UPDATE_FLAG_MARK_IN_SYNC);
+							}
+						}
+					}
+					catch
+					{
+						// Ignore update exceptions to avoid crashing the move operation
+					}
+					// ----- End metadata update logic -----
 				}
 				else
 				{
@@ -430,15 +508,46 @@ internal class FileOperations
 	/// <exception cref="InvalidOperationException">Thrown if the file is in the upload queue or currently in use.</exception>
 	public async Task DeleteFile(string localPath)
 	{
-		var isDirectory = File.GetAttributes(localPath).HasFlag(FileAttributes.Directory);
+		// Determine if target is a directory. This call will throw if the path does not exist,
+		// so catch and handle missing files gracefully.
+		bool isDirectory;
+		try
+		{
+			isDirectory = File.GetAttributes(localPath).HasFlag(FileAttributes.Directory);
+		}
+		catch (FileNotFoundException)
+		{
+			// The file was already removed locally. Consider the deletion successful.
+			Log.Warn($"DeleteFile: Local path '{localPath}' does not exist. Assuming deletion has already occurred.");
+			return;
+		}
+		catch (Exception ex)
+		{
+			// Unexpected error while checking attributes. Log and rethrow.
+			Log.Error($"DeleteFile: Unexpected exception while checking attributes for '{localPath}': {ex.Message}");
+			throw;
+		}
+
+		// Prevent deletion of a file currently queued for upload
 		if (!isDirectory && _filesToUpload.Contains(localPath))
 		{
 			throw new InvalidOperationException("Cannot delete file, file is in upload queue.");
 		}
 
+		// Avoid processing the same delete twice
 		if (_filesToDelete.Contains(localPath))
 		{
 			return;
+		}
+
+		// Protect against deleting the root sync folder
+		if (isDirectory)
+		{
+			var normalizedPath = localPath.TrimEnd('\u005C');
+			if (string.Equals(normalizedPath, _localRootpath.TrimEnd('\u005C'), StringComparison.OrdinalIgnoreCase))
+			{
+				throw new InvalidOperationException("Cannot delete the root sync directory.");
+			}
 		}
 
 		_filesToDelete.Add(localPath);
@@ -449,16 +558,62 @@ internal class FileOperations
 
 			async Task PerformTask()
 			{
+				// Prevent deletion if another operation is using this path
 				if (!CanChangeFile(localPath))
 				{
 					throw new InvalidOperationException("Cannot delete file, file is in use.");
 				}
 
-				var path = LocalPathToCloudPath(localPath, isDirectory);
-				var fileInfo = await _fileService.GetFileOrFolderInfo(TokenStorage.TeamID, path) ?? throw new InvalidOperationException();
-				var file = new FileParam { Path = fileInfo.File.Path, Size = fileInfo.File.Size, VersionID = fileInfo.File.VersionID, LastModified = fileInfo.File.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ") };
+				// Convert local path to cloud path
+				var cloudPath = LocalPathToCloudPath(localPath, isDirectory);
 
-				await _teamDriveService.DeleteTeamFile(file, true, _cancellationTokenSource.Token);
+				// Try to fetch server metadata. If the server has no record of the file (e.g. already deleted),
+				// we simply return and allow the OS to remove the local placeholder.
+				// Fetch the file or folder info from the server. Use the concrete return type from the FileService.
+				FileOrFolderInfoResponse? fileInfo = null;
+				try
+				{
+					fileInfo = await _fileService.GetFileOrFolderInfo(TokenStorage.TeamID, cloudPath);
+				}
+				catch (Exception ex)
+				{
+					// Log but do not throw; failure to fetch metadata should not prevent deletion.
+					Log.Warn($"DeleteFile: Failed to fetch server metadata for '{cloudPath}': {ex.Message}");
+				}
+
+				if (fileInfo?.File != null)
+				{
+					var fileParam = new FileParam { Path = fileInfo.File.Path, Size = fileInfo.File.Size, VersionID = fileInfo.File.VersionID, LastModified = fileInfo.File.LastModified.ToString("yyyy-MM-ddTHH:mm:ss.fffZ") };
+
+					try
+					{
+						// Initiate deletion on the server. Even if this throws, the file may already be deleted.
+						await _teamDriveService.DeleteTeamFile(fileParam, true, _cancellationTokenSource.Token);
+					}
+					catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
+					{
+						// User lacks permission to delete; show a helpful message and rethrow.
+						var message = string.Format(Strings.error_no_permission_message_delete, StringHelper.GetLastPartOfPath(cloudPath));
+						ShowMessage(Strings.error_general_title_delete, message);
+						throw;
+					}
+					catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.BadRequest)
+					{
+						// The server reports a bad request, e.g. SENDY_ERR_FILE_NO_SUCH_KEY. Treat as success and log a warning.
+						Log.Warn($"DeleteFile: Server returned {ex.StatusCode} while deleting '{cloudPath}'. The file may already be gone. Message: {ex.Message}");
+						// Do not rethrow; consider deletion successful.
+					}
+					catch (Exception ex)
+					{
+						// For any other error, log and rethrow to signal failure to the caller.
+						Log.Error($"DeleteFile: Unexpected exception while deleting '{cloudPath}': {ex.Message}");
+						throw;
+					}
+				}
+
+				// Do NOT delete the local file or directory here. The cloud filter driver will handle
+				// placeholder removal and propagate deletion in response to this callback.
+				// If we remove the file manually, the OS may show a generic error (0x80070185).
 			}
 
 			await AwaitTask(localPath, PerformTask());
